@@ -1,0 +1,32 @@
+{
+  "store_name": "RAMRAJ",
+  "currency": "\u20b9",
+  "tax_rate": 5.0,
+  "appearance_mode": "System",
+  "discount_tiers": [
+    [
+      2000.0,
+      5.0
+    ],
+    [
+      5000.0,
+      10.0
+    ]
+  ],
+  "payment_methods": [
+    "Cash",
+    "Card",
+    "UPI",
+    "Crypto"
+  ],
+  "upi_id": "ratanthakar@fam",
+  "bank_details": "SBI, A/C: 1234567890, IFSC: SBIN0001234",
+  "crypto_wallet": "ADWR1234567890",
+  "loyalty_points_per_100": 1,
+  "loyalty_redemption_rate": 1.0,
+  "backup_dir": "",
+  "smtp_server": "",
+  "smtp_port": 587,
+  "smtp_user": "",
+  "smtp_pass": ""
+}

@@ -1,0 +1,253 @@
+"""PDF Export helper for Receipts and History Reports.
+
+Uses `fpdf2` to produce printable PDF receipts and bill history documents.
+Automatically discovers and embeds Unicode fonts (such as DejaVu Sans or Arial)
+to render currency signs like ₹ or € properly.
+"""
+
+from __future__ import annotations
+
+import os
+from datetime import datetime
+
+import matplotlib
+from fpdf import FPDF
+
+from core.calculations import Bill
+from core.settings import Settings
+
+
+def _unicode_font_path() -> str | None:
+    """Find a TrueType font on the local system that supports Unicode symbols."""
+    candidates = [
+        os.path.join(
+            os.path.dirname(matplotlib.__file__), "mpl-data", "fonts", "ttf",
+            "DejaVuSans.ttf",
+        ),
+        r"C:\Windows\Fonts\arial.ttf",
+        r"C:\Windows\Fonts\segoeui.ttf",
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return None
+
+
+_FONT_PATH = _unicode_font_path()
+_UNICODE_FAMILY = "Uni"  # family name registered from the TTF above
+
+
+class _Pdf(FPDF):
+    def __init__(self, title: str) -> None:
+        super().__init__()
+        self._title = title
+        if _FONT_PATH is not None:
+            try:
+                self.add_font(_UNICODE_FAMILY, "", _FONT_PATH)
+                self.add_font(_UNICODE_FAMILY, "B", _FONT_PATH)
+            except Exception:
+                pass
+        self.add_page()
+
+    def header(self) -> None:
+        self._body_font(14, bold=True)
+        self.cell(0, 8, self._title, align="C", new_x="LMARGIN", new_y="NEXT")
+        self.ln(2)
+
+    def footer(self) -> None:
+        self.set_y(-15)
+        self._body_font(8)
+        self.cell(0, 10, f"Page {self.page_no()}", align="C")
+
+    def _body_font(self, size: int, *, bold: bool = False) -> None:
+        if _FONT_PATH is not None:
+            self.set_font(_UNICODE_FAMILY, "B" if bold else "", size)
+        else:
+            self.set_font("helvetica", "B" if bold else "", size)
+
+    def _text(self, value: object) -> str:
+        text = str(value)
+        if _FONT_PATH is None:
+            text = text.replace("\u20b9", "Rs.")
+        return text
+
+
+def _sanitize_rows(rows: list[tuple[str, object]]) -> list[tuple[str, str]]:
+    """Convert values to safe strings (fallback replaces ₹)."""
+    out: list[tuple[str, str]] = []
+    for label, value in rows:
+        text = str(value)
+        if _FONT_PATH is None:
+            text = text.replace("\u20b9", "Rs.")
+        out.append((str(label), text))
+    return out
+
+
+def export_receipt_pdf(bill: Bill, path: str, settings: Settings, format_mode: str = "A4") -> None:
+    """Write *bill* to a receipt PDF at *path* in either 'A4' or '80mm' thermal slip format."""
+    currency = settings.currency
+
+    if format_mode == "80mm":
+        # 80mm roll width is approx 80mm x 200mm (or dynamic length)
+        # Calculate dynamic page height based on number of items
+        item_count = len(bill.items)
+        calc_height = max(140.0, 90.0 + (item_count * 9.0))
+        pdf = FPDF(unit="mm", format=(80.0, calc_height))
+        if _FONT_PATH is not None:
+            try:
+                pdf.add_font(_UNICODE_FAMILY, "", _FONT_PATH)
+                pdf.add_font(_UNICODE_FAMILY, "B", _FONT_PATH)
+            except Exception:
+                pass
+        pdf.set_margins(4, 4, 4)
+        pdf.set_auto_page_break(False)
+        pdf.add_page()
+
+        # Helper font setting
+        def use_font(size: int = 8, bold: bool = False):
+            family = _UNICODE_FAMILY if _FONT_PATH else "Helvetica"
+            pdf.set_font(family, "B" if bold else "", size)
+
+        use_font(11, bold=True)
+        pdf.cell(72, 6, settings.store_name, align="C", new_x="LMARGIN", new_y="NEXT")
+        use_font(8)
+        pdf.cell(72, 4, f"Receipt #{bill.created_at:%y%m%d%H%M%S}", align="C", new_x="LMARGIN", new_y="NEXT")
+        pdf.cell(72, 4, f"Date: {bill.created_at:%Y-%m-%d %H:%M}", align="C", new_x="LMARGIN", new_y="NEXT")
+        if bill.customer_name:
+            pdf.cell(72, 4, f"Cust: {bill.customer_name} ({bill.customer_phone or ''})", align="C", new_x="LMARGIN", new_y="NEXT")
+        pdf.line(4, pdf.get_y() + 1, 76, pdf.get_y() + 1)
+        pdf.ln(3)
+
+        # Thermal items table (width total = 72mm)
+        use_font(8, bold=True)
+        pdf.cell(34, 5, "Item", border=0)
+        pdf.cell(10, 5, "Qty", align="C", border=0)
+        pdf.cell(14, 5, "Price", align="R", border=0)
+        pdf.cell(14, 5, "Total", align="R", new_x="LMARGIN", new_y="NEXT", border=0)
+        use_font(8)
+        for it in bill.items:
+            desc = (it.description or "")[:18]
+            pdf.cell(34, 4, desc, border=0)
+            pdf.cell(10, 4, str(it.qty), align="C", border=0)
+            pdf.cell(14, 4, f"{it.unit_price:.1f}", align="R", border=0)
+            pdf.cell(14, 4, f"{it.line_total:.1f}", align="R", new_x="LMARGIN", new_y="NEXT", border=0)
+
+        pdf.line(4, pdf.get_y() + 1, 76, pdf.get_y() + 1)
+        pdf.ln(3)
+
+        # Totals
+        pdf.cell(44, 4, "Subtotal:")
+        pdf.cell(28, 4, f"{currency}{bill.subtotal:.2f}", align="R", new_x="LMARGIN", new_y="NEXT")
+        if bill.discount > 0:
+            pdf.cell(44, 4, "Discount:")
+            pdf.cell(28, 4, f"-{currency}{bill.discount:.2f}", align="R", new_x="LMARGIN", new_y="NEXT")
+        if bill.points_redeemed > 0:
+            pdf.cell(44, 4, "Loyalty Redeemed:")
+            pdf.cell(28, 4, f"-{currency}{bill.points_redeemed:.2f}", align="R", new_x="LMARGIN", new_y="NEXT")
+        pdf.cell(44, 4, f"Tax ({settings.tax_rate:.0f}%):")
+        pdf.cell(28, 4, f"{currency}{bill.tax:.2f}", align="R", new_x="LMARGIN", new_y="NEXT")
+
+        use_font(10, bold=True)
+        pdf.cell(44, 6, "GRAND TOTAL:")
+        pdf.cell(28, 6, f"{currency}{bill.total:.2f}", align="R", new_x="LMARGIN", new_y="NEXT")
+
+        use_font(7)
+        pdf.ln(2)
+        pdf.cell(72, 4, "Thank you for shopping with us!", align="C", new_x="LMARGIN", new_y="NEXT")
+        pdf.output(path)
+        return
+
+    # Standard A4 PDF export
+    pdf = _Pdf(f"{settings.store_name} — Receipt #{bill.created_at:%Y%m%d-%H%M%S}")
+
+    pdf._body_font(10)
+    for label, value in [
+        ("Date", f"{bill.created_at:%Y-%m-%d %H:%M:%S}"),
+        ("Customer", bill.customer_name or "-"),
+        ("Phone", bill.customer_phone),
+        ("Email", bill.customer_email),
+    ]:
+        if value:
+            pdf.cell(0, 6, f"{label}: {value}", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(4)
+
+    # Items table
+    col_widths = (18, 62, 18, 26, 26)
+    headers = ("#", "Item", "Qty", "Price", "Total")
+    pdf._body_font(9, bold=True)
+    pdf.set_fill_color(235, 235, 235)
+    for w, h in zip(col_widths, headers):
+        pdf.cell(w, 7, pdf._text(h), border=1, fill=True)
+    pdf.ln()
+
+    pdf._body_font(9)
+    for idx, item in enumerate(bill.items, start=1):
+        desc = (item.description or "")[:30]
+        pdf.cell(col_widths[0], 6, pdf._text(idx), border=1)
+        pdf.cell(col_widths[1], 6, pdf._text(desc), border=1)
+        pdf.cell(col_widths[2], 6, pdf._text(item.qty), border=1)
+        pdf.cell(col_widths[3], 6, pdf._text(f"{currency}{item.unit_price:.2f}"), border=1)
+        pdf.cell(col_widths[4], 6, pdf._text(f"{currency}{item.line_total:.2f}"), border=1)
+        pdf.ln()
+
+    pdf.ln(4)
+    rows: list[tuple[str, object]] = [("Subtotal", f"{currency}{bill.subtotal:.2f}")]
+    if bill.discount:
+        rows.append(("Discount", f"-{currency}{bill.discount:.2f}"))
+    if bill.points_redeemed:
+        rows.append(("Loyalty redeemed", f"-{currency}{bill.points_redeemed:.2f}"))
+    rows.append((f"Tax ({settings.tax_rate:.0f}%)", f"{currency}{bill.tax:.2f}"))
+    rows.append(("Loyalty points earned", str(bill.loyalty_points)))
+    if bill.points_used:
+        rows.append(("Points redeemed", str(bill.points_used)))
+
+    pdf._body_font(10)
+    for label, value in _sanitize_rows(rows):
+        pdf.cell(80, 7, pdf._text(label))
+        pdf.cell(0, 7, pdf._text(value), align="R", new_x="LMARGIN", new_y="NEXT")
+
+    pdf._body_font(12, bold=True)
+    pdf.cell(80, 9, pdf._text("TOTAL PAYABLE"))
+    pdf.cell(0, 9, pdf._text(f"{currency}{bill.total:.2f}"), align="R",
+             new_x="LMARGIN", new_y="NEXT")
+
+    pdf.output(path)
+
+
+def export_history_pdf(
+    rows: list[dict], path: str, settings: Settings, title: str = "Bill History"
+) -> None:
+    """Write bill-history *rows* (as returned by database.search_bills) to PDF."""
+    pdf = _Pdf(f"{settings.store_name} — {title}")
+    currency = settings.currency
+    pdf._body_font(9)
+    pdf.cell(0, 6, pdf._text(f"Generated: {datetime.now():%Y-%m-%d %H:%M:%S}"),
+             new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(2)
+
+    col_widths = (14, 30, 52, 30, 22, 34)
+    headers = ("ID", "Date", "Customer", "Phone", "Pts", "Total")
+    pdf._body_font(9, bold=True)
+    pdf.set_fill_color(235, 235, 235)
+    for w, h in zip(col_widths, headers):
+        pdf.cell(w, 7, pdf._text(h), border=1, fill=True)
+    pdf.ln()
+
+    pdf._body_font(9)
+    for r in rows:
+        created = str(r.get("created_at", ""))[:10]
+        pdf.cell(col_widths[0], 6, pdf._text(r.get("id", "")), border=1)
+        pdf.cell(col_widths[1], 6, pdf._text(created), border=1)
+        pdf.cell(col_widths[2], 6, pdf._text(str(r.get("customer_name", ""))[:24]), border=1)
+        pdf.cell(col_widths[3], 6, pdf._text(r.get("phone", "")), border=1)
+        pdf.cell(col_widths[4], 6, pdf._text(r.get("loyalty_points", 0)), border=1)
+        pdf.cell(col_widths[5], 6, pdf._text(f"{currency}{r.get('total', 0.0):.2f}"), border=1)
+        pdf.ln()
+
+    pdf.ln(3)
+    total = sum(r.get("total", 0.0) for r in rows)
+    pdf._body_font(10, bold=True)
+    pdf.cell(80, 8, pdf._text(f"Total bills: {len(rows)}"))
+    pdf.cell(0, 8, pdf._text(f"Grand total: {currency}{total:.2f}"),
+             align="R", new_x="LMARGIN", new_y="NEXT")
+    pdf.output(path)

@@ -1,0 +1,16 @@
+# Customer Billing System — Python dependencies
+#
+# Modern UI, PDF export and charting require these three packages. Install them
+# with:
+#
+#     python -m pip install -r requirements.txt
+#
+# Minimum Python version: 3.10
+
+customtkinter>=5.2
+fpdf2>=2.7
+matplotlib>=3.7
+bcrypt>=4.0.0
+qrcode[pil]>=7.4
+Pillow>=9.5
+python-barcode>=0.15.1

@@ -142,6 +142,29 @@ class Bill:
     payment_method: str
     created_at: datetime
 
+    def digital_summary(self, store_name: str = "Store", currency: str = "") -> str:
+        """Compact text representation embedded into soft-copy QR codes."""
+        lines = [
+            f"=== {store_name} E-RECEIPT ===",
+            f"Bill #{self.created_at:%y%m%d%H%M%S}",
+            f"Date: {self.created_at:%Y-%m-%d %H:%M}",
+            f"Customer: {self.customer_name or 'Valued Customer'}",
+            "--- ITEMS ---",
+        ]
+        for it in self.items:
+            lines.append(f"{it.description} x{it.qty}: {currency}{it.line_total:.2f}")
+        lines.append("-------------")
+        lines.append(f"Subtotal: {currency}{self.subtotal:.2f}")
+        if self.discount > 0:
+            lines.append(f"Discount: -{currency}{self.discount:.2f}")
+        if self.points_redeemed > 0:
+            lines.append(f"Redeemed: -{currency}{self.points_redeemed:.2f}")
+        lines.append(f"Tax: {currency}{self.tax:.2f}")
+        lines.append(f"TOTAL: {currency}{self.total:.2f}")
+        lines.append(f"Paid via: {self.payment_method}")
+        lines.append("Thank you for shopping!")
+        return "\n".join(lines)
+
     @classmethod
     def from_items(
         cls,

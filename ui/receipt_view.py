@@ -71,14 +71,25 @@ class ReceiptView(ctk.CTkFrame):
 
         ctk.CTkButton(
             actions,
-            text="📱 UPI QR",
-            width=90,
+            text="📱 Payment QR",
+            width=105,
             height=34,
             corner_radius=8,
             fg_color="#8b5cf6",
             hover_color="#7c3aed",
-            command=self._show_qr,
+            command=self._show_payment_qr,
         ).pack(side="left")
+
+        ctk.CTkButton(
+            actions,
+            text="📲 Soft Copy QR",
+            width=115,
+            height=34,
+            corner_radius=8,
+            fg_color="#3b82f6",
+            hover_color="#2563eb",
+            command=self._show_soft_copy_qr,
+        ).pack(side="left", padx=6)
 
         ctk.CTkButton(
             actions,
@@ -89,7 +100,7 @@ class ReceiptView(ctk.CTkFrame):
             fg_color="#16a34a",
             hover_color="#15803d",
             command=self._send_whatsapp,
-        ).pack(side="left", padx=6)
+        ).pack(side="left")
 
         ctk.CTkButton(
             actions,
@@ -100,7 +111,7 @@ class ReceiptView(ctk.CTkFrame):
             fg_color="#0284c7",
             hover_color="#0369a1",
             command=self._send_email,
-        ).pack(side="left")
+        ).pack(side="left", padx=6)
 
         ctk.CTkButton(
             actions,
@@ -145,8 +156,8 @@ class ReceiptView(ctk.CTkFrame):
             command=self._save,
         ).pack(side="right")
 
-    def _show_qr(self) -> None:
-        """Generate and display dynamic UPI QR code for the customer to scan."""
+    def _show_payment_qr(self) -> None:
+        """Generate and display dynamic UPI Payment QR code."""
         import qrcode
         from PIL import ImageTk
 
@@ -164,7 +175,7 @@ class ReceiptView(ctk.CTkFrame):
 
         # Display in modern CTk dialog
         win = ctk.CTkToplevel(self)
-        win.title("UPI Payment QR")
+        win.title("Payment QR Code")
         win.geometry("340x440")
         win.resizable(False, False)
         win.grab_set()
@@ -195,6 +206,59 @@ class ReceiptView(ctk.CTkFrame):
             corner_radius=8,
             command=win.destroy,
         ).pack(pady=(16, 12))
+
+    def _show_soft_copy_qr(self) -> None:
+        """Generate and display QR code encoding the complete itemized soft copy of the bill."""
+        import qrcode
+        from PIL import ImageTk
+
+        summary = self.bill.digital_summary(
+            store_name=self.app.settings.store_name,
+            currency=self.app.settings.currency,
+        )
+
+        qr = qrcode.QRCode(box_size=5, border=2)
+        qr.add_data(summary)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+
+        win = ctk.CTkToplevel(self)
+        win.title("Bill Soft-Copy QR")
+        win.geometry("380x500")
+        win.resizable(False, False)
+        win.grab_set()
+
+        ctk.CTkLabel(
+            win,
+            text="📲 Scan for Digital Bill",
+            font=ctk.CTkFont(size=16, weight="bold"),
+        ).pack(pady=(18, 4))
+
+        ctk.CTkLabel(
+            win,
+            text="Customers can scan this with any phone camera to get the full receipt",
+            text_color="gray",
+            font=ctk.CTkFont(size=11),
+            wraplength=340,
+        ).pack(pady=(0, 10))
+
+        tk_img = ImageTk.PhotoImage(img)
+        lbl = tk.Label(win, image=tk_img, bg="white")
+        lbl.image = tk_img  # prevent garbage collection
+        lbl.pack(pady=4)
+
+        ctk.CTkButton(
+            win,
+            text="Close",
+            width=120,
+            height=32,
+            corner_radius=8,
+            command=win.destroy,
+        ).pack(pady=(14, 10))
+
+    def _show_qr(self) -> None:
+        """Backwards compatibility alias for _show_payment_qr."""
+        self._show_payment_qr()
 
     def _send_whatsapp(self) -> None:
         """Open WhatsApp chat with an itemized receipt message for the customer."""

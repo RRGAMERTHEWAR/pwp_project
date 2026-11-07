@@ -8,9 +8,11 @@ to render currency signs like ₹ or € properly.
 from __future__ import annotations
 
 import os
+import tempfile
 from datetime import datetime
 
 import matplotlib
+import qrcode
 from fpdf import FPDF
 
 from core.calculations import Bill
@@ -151,6 +153,36 @@ def export_receipt_pdf(bill: Bill, path: str, settings: Settings, format_mode: s
         pdf.cell(44, 6, "GRAND TOTAL:")
         pdf.cell(28, 6, f"{currency}{bill.total:.2f}", align="R", new_x="LMARGIN", new_y="NEXT")
 
+        # Dynamic QR code embedding (Payment & Digital Soft Copy)
+        try:
+            upi_id = getattr(settings, "upi_id", "") or "store@upi"
+            st_name = settings.store_name.replace(" ", "%20")
+            amt = f"{bill.total:.2f}"
+            upi_payload = f"upi://pay?pa={upi_id}&pn={st_name}&am={amt}&cu=INR"
+
+            qr = qrcode.QRCode(box_size=4, border=1)
+            qr.add_data(upi_payload)
+            qr.make(fit=True)
+            qr_img = qr.make_image(fill_color="black", back_color="white")
+
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
+                qr_tmp_path = tf.name
+                qr_img.save(qr_tmp_path)
+
+            pdf.ln(2)
+            # Center a 26mm x 26mm QR code on the 80mm slip
+            qr_x = (80.0 - 26.0) / 2
+            pdf.image(qr_tmp_path, x=qr_x, y=pdf.get_y(), w=26, h=26)
+            pdf.set_y(pdf.get_y() + 27)
+            try:
+                os.remove(qr_tmp_path)
+            except OSError:
+                pass
+            use_font(7, bold=True)
+            pdf.cell(72, 3, "Scan to Pay / Verify Bill", align="C", new_x="LMARGIN", new_y="NEXT")
+        except Exception:
+            pass
+
         use_font(7)
         pdf.ln(2)
         pdf.cell(72, 4, "Thank you for shopping with us!", align="C", new_x="LMARGIN", new_y="NEXT")
@@ -210,6 +242,61 @@ def export_receipt_pdf(bill: Bill, path: str, settings: Settings, format_mode: s
     pdf.cell(80, 9, pdf._text("TOTAL PAYABLE"))
     pdf.cell(0, 9, pdf._text(f"{currency}{bill.total:.2f}"), align="R",
              new_x="LMARGIN", new_y="NEXT")
+
+    # Dual QR Codes on A4 invoice:
+    # 1. Payment QR (UPI / Bank transfer)
+    # 2. Digital Soft-Copy QR (scan with phone camera to view full itemized bill text)
+    try:
+        upi_id = getattr(settings, "upi_id", "") or "store@upi"
+        st_name = settings.store_name.replace(" ", "%20")
+        amt = f"{bill.total:.2f}"
+        upi_payload = f"upi://pay?pa={upi_id}&pn={st_name}&am={amt}&cu=INR"
+        soft_copy_payload = bill.digital_summary(store_name=settings.store_name, currency=currency)
+
+        # Generate Payment QR
+        qr_pay = qrcode.QRCode(box_size=4, border=1)
+        qr_pay.add_data(upi_payload)
+        qr_pay.make(fit=True)
+        img_pay = qr_pay.make_image(fill_color="black", back_color="white")
+
+        # Generate Soft Copy QR
+        qr_copy = qrcode.QRCode(box_size=4, border=1)
+        qr_copy.add_data(soft_copy_payload)
+        qr_copy.make(fit=True)
+        img_copy = qr_copy.make_image(fill_color="black", back_color="white")
+
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf1:
+            p1 = tf1.name
+            img_pay.save(p1)
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf2:
+            p2 = tf2.name
+            img_copy.save(p2)
+
+        pdf.ln(6)
+        curr_y = pdf.get_y()
+        if curr_y > 230:
+            pdf.add_page()
+            curr_y = pdf.get_y()
+
+        # Render side-by-side QR codes
+        qr_size = 32
+        pdf.image(p1, x=25, y=curr_y, w=qr_size, h=qr_size)
+        pdf.image(p2, x=140, y=curr_y, w=qr_size, h=qr_size)
+
+        pdf.set_y(curr_y + qr_size + 2)
+        pdf._body_font(8, bold=True)
+        pdf.set_x(15)
+        pdf.cell(52, 4, pdf._text("Scan to Pay (UPI)"), align="C")
+        pdf.set_x(130)
+        pdf.cell(52, 4, pdf._text("Scan for Digital Soft Copy"), align="C", new_x="LMARGIN", new_y="NEXT")
+
+        try:
+            os.remove(p1)
+            os.remove(p2)
+        except OSError:
+            pass
+    except Exception:
+        pass
 
     pdf.output(path)
 
